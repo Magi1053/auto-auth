@@ -1,0 +1,97 @@
+import java.util.zip.ZipFile
+import groovy.json.JsonSlurper
+
+tasks.register('verifySourceText') {
+    group = 'verification'
+    description = 'Checks authored source, scripts, configuration and documentation for BOM/CRLF.'
+    doLast {
+        def authored = fileTree(rootDir) {
+            exclude '.git/**', '**/.gradle/**', '.tmp/**', '**/build/**', '**/runs/**', '**/run/**', '.vscode/**'
+            include '**/*.java', '**/*.gradle', '**/*.json', '**/*.xml', '**/*.toml', '**/*.md', '**/*.properties', '**/*.yml', '**/*.yaml', '**/*.bat', '.gitattributes', '.gitignore'
+        }
+        def bad = authored.files.findAll { file ->
+            def bytes = file.bytes
+            (bytes.length >= 3 && bytes[0] == (byte)0xef && bytes[1] == (byte)0xbb && bytes[2] == (byte)0xbf) || bytes.any { it == (byte)13 }
+        }
+        if (!bad.empty) throw new GradleException('Source text must be LF without BOM: ' + bad.collect { relativePath(it) })
+        logger.lifecycle('Authored text is LF without UTF-8 BOM')
+    }
+}
+
+tasks.register('verifyArtifacts') {
+    group = 'verification'
+    description = 'Checks both distributed jars, metadata, mixins and exclusion of test fixtures.'
+    dependsOn ':fabric:remapJar', ':neoforge:jar', 'verifySourceText'
+    doLast {
+        ['fabric', 'neoforge'].each { loader ->
+            def task = project(":${loader}").tasks.named(loader == 'fabric' ? 'remapJar' : 'jar').get()
+            def jar = task.archiveFile.get().asFile
+            new ZipFile(jar).withCloseable { zip ->
+                def names = zip.entries().collect { it.name }
+                def read = { String name ->
+                    def entry = zip.getEntry(name)
+                    if (entry == null) throw new GradleException("${loader}: missing ${name}")
+                    zip.getInputStream(entry).getText('UTF-8')
+                }
+                if (names.any { it.contains('/runtimetest/') || it.contains('/testfixture/') || it.startsWith('autoauth.runtime-tests') || it.endsWith('Test.class') }) {
+                    throw new GradleException("${loader}: test code leaked into distributed jar")
+                }
+                def service = read('META-INF/services/com.skcraft.autoauth.platform.services.IPlatformHelper').trim()
+                def expected = "com.skcraft.autoauth.${loader}.platform.${loader == 'fabric' ? 'Fabric' : 'NeoForge'}PlatformHelper"
+                if (service != expected) throw new GradleException("${loader}: incorrect platform service")
+                def mixins = new JsonSlurper().parseText(read('autoauth.mixins.json'))
+                mixins.client.each { mixin ->
+                    read((mixins.package + '.' + mixin).replace('.', '/') + '.class')
+                }
+                read('assets/autoauth/lang/en_us.json')
+                def baked = new Properties()
+                baked.load(new StringReader(read('autoauth-build.properties')))
+                if (baked.getProperty('azure_client_id', '') != (findProperty('azure_client_id') ?: '').toString()) {
+                    throw new GradleException("${loader}: jar public client ID differs from build configuration")
+                }
+                if (loader == 'fabric') {
+                    def metadata = new JsonSlurper().parseText(read('fabric.mod.json'))
+                    if (metadata.environment != 'client') throw new GradleException('Fabric must remain client-only')
+                    read('autoauth.accesswidener')
+                    def refmap = new JsonSlurper().parseText(read('autoauth.refmap.json'))
+                    if (!refmap.mappings) throw new GradleException('Fabric refmap is empty')
+                } else {
+                    read('META-INF/neoforge.mods.toml')
+                }
+                logger.lifecycle("Verified ${loader} distribution: ${jar.name}")
+            }
+        }
+    }
+}
+
+tasks.register('verifyRelease') {
+    group = 'verification'
+    description = 'Rejects release artifacts without an owned, configured Microsoft public client ID.'
+    dependsOn 'verifyArtifacts'
+    doLast {
+        def clientId = (findProperty('azure_client_id') ?: '').toString().trim()
+        if (!(clientId ==~ /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)) {
+            throw new GradleException('Release blocked: configure an owned Microsoft public-client registration with azure_client_id. Fixture-only development builds may leave it blank.')
+        }
+        logger.lifecycle('Release metadata valid. Live provider/server/Realms checks in TESTING.md are still required.')
+    }
+}
+
+tasks.register('verifyAll') {
+    group = 'verification'
+    description = 'Runs deterministic tests, distribution checks and both development/packaged client suites.'
+    dependsOn ':common:test', ':fabric:build', ':neoforge:build', 'verifyArtifacts',
+            ':fabric:clientTest', ':neoforge:clientTest', ':fabric:packagedClientTest', ':neoforge:packagedClientTest'
+}
+
+// These tasks share a graphical desktop. Never start simultaneous client windows,
+// even when Gradle's project parallelism is enabled for compilation.
+gradle.projectsEvaluated {
+    def launches = [project(':fabric').tasks.named('runRegression').get(),
+            project(':neoforge').tasks.named('runRegression').get(),
+            project(':fabric').tasks.named('runPackagedRegression').get(),
+            project(':neoforge').tasks.named('runPackagedRegression').get()]
+    launches.eachWithIndex { task, index ->
+        if (index > 0) task.mustRunAfter(launches.take(index))
+    }
+}

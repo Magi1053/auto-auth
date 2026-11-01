@@ -1,0 +1,50 @@
+// Test code is a separate mod/source set and never part of a distributed jar.
+sourceSets {
+    runtimeTest {
+        java.srcDir rootProject.file('runtime-tests/src/main/java')
+        resources.srcDir rootProject.file('runtime-tests/src/main/resources')
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+configurations.runtimeTestAnnotationProcessor.extendsFrom configurations.annotationProcessor
+
+tasks.register('runtimeTestJar', Jar) {
+    from sourceSets.runtimeTest.output
+    archiveClassifier = 'runtime-tests'
+}
+
+tasks.register('clientTest') {
+    group = 'verification'
+    description = 'Runs isolated actual-client regression scenarios with synthetic accounts.'
+    dependsOn 'runRegression'
+    doLast {
+        def result = rootProject.file(".tmp/agent-game-test/${project.name}/results.txt")
+        if (!result.isFile() || !result.text.contains('ALL CLIENT CHECKS PASSED')) {
+            throw new GradleException("Missing or failed ${project.name} client results: ${result}")
+        }
+        def xml = new File(result.parentFile, 'runtime-tests.xml')
+        if (!xml.isFile()) throw new GradleException('Missing fresh runtime-tests.xml')
+        def suite = new XmlSlurper().parse(xml)
+        if (suite.@tests.toInteger() < 1 || suite.@failures.toInteger() != 0 || suite.@errors.toInteger() != 0 || suite.@skipped.toInteger() != 0) {
+            throw new GradleException('Incomplete or failing client test manifest')
+        }
+        def required = new groovy.json.JsonSlurper().parse(rootProject.file('runtime-tests/scenarios.json'))
+        def observed = suite.testcase.collect { it.@name.toString() }
+        if (observed.size() != required.size() || observed.toSet() != required.toSet()) {
+            throw new GradleException("Incorrect ${project.name} scenario inventory; expected ${required}, observed ${observed}")
+        }
+        logger.lifecycle(result.text)
+    }
+}
+
+tasks.withType(JavaExec).configureEach {
+    if (name == 'runRegression' || name == 'runPackagedRegression') {
+        timeout = java.time.Duration.ofMinutes(5)
+        doFirst {
+            def resultDir = rootProject.file(".tmp/agent-game-test/${project.name}" + (name == 'runPackagedRegression' ? '-packaged' : ''))
+            resultDir.mkdirs()
+            ['results.txt', 'runtime-tests.xml', 'failure.png'].each { new File(resultDir, it).delete() }
+        }
+    }
+}

@@ -1,0 +1,77 @@
+name: Publish Modrinth
+on:
+  push:
+    tags:
+      - "v*"
+permissions:
+  contents: read
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      minecraft: ${{ steps.meta.outputs.minecraft }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Validate release metadata
+        id: meta
+        env:
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version=//p' gradle.properties)
+          MC=$(sed -n 's/^minecraft_version=//p' gradle.properties)
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          test -n "$MODRINTH_PROJECT_ID"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "minecraft=$MC" >> "$GITHUB_OUTPUT"
+      - name: Verify release including actual clients
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "true"
+          ALSOFT_DRIVERS: "null"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dri
+          xvfb-run -a bash gradlew clean verifyAll --no-parallel --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: |
+            fabric/build/libs/autoauth-fabric-*.jar
+            neoforge/build/libs/autoauth-neoforge-*.jar
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        loader: [fabric, neoforge]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: distributions
+      - name: Publish loader distribution
+        uses: Kira-NT/mc-publish@v3
+        with:
+          modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: distributions/${{ matrix.loader }}/build/libs/autoauth-${{ matrix.loader }}-${{ needs.build.outputs.minecraft }}-${{ needs.build.outputs.version }}.jar
+          name: Auto-Auth ${{ needs.build.outputs.version }} (${{ matrix.loader }})
+          version: ${{ needs.build.outputs.version }}-${{ matrix.loader }}
+          version-type: release
+          changelog: Auto-Auth ${{ needs.build.outputs.version }} for Minecraft ${{ needs.build.outputs.minecraft }}.
+          loaders: ${{ matrix.loader }}
+          game-versions: ${{ needs.build.outputs.minecraft }}
+          java: "21"
+          dependencies: ${{ matrix.loader == 'fabric' && 'fabric-api(required)' || '' }}

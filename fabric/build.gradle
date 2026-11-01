@@ -1,0 +1,58 @@
+plugins {
+    id 'multiloader-loader'
+    id 'fabric-loom'
+}
+
+apply from: rootProject.file('gradle/runtime-tests.gradle')
+
+loom {
+    mixin {
+        add(sourceSets.main, 'autoauth.refmap.json')
+        add(sourceSets.runtimeTest, 'autoauth.tests.refmap.json')
+    }
+    runs {
+        regression {
+            client()
+            source sourceSets.runtimeTest
+            runDir '../.tmp/agent-game-test/fabric'
+            vmArg '-Dautoauth.test.output=' + project.rootProject.file('.tmp/agent-game-test/fabric').absolutePath
+            programArg '--username'
+            programArg 'AutoAuthTest'
+        }
+    }
+}
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.layered {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-${parchment_minecraft}:${parchment_version}@zip")
+    }
+    modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
+}
+
+loom {
+    def aw = project(':common').file("src/main/resources/${mod_id}.accesswidener")
+    if (aw.exists()) {
+        accessWidenerPath.set(aw)
+    }
+    mixin {
+        defaultRefmapName.set("${mod_id}.refmap.json")
+    }
+    runs {
+        client {
+            client()
+            setConfigName('Fabric Client')
+            ideConfigGenerated(true)
+            runDir('runs/client')
+        }
+        server {
+            server()
+            setConfigName('Fabric Server')
+            ideConfigGenerated(true)
+            runDir('runs/server')
+        }
+    }
+}
+
+apply from: rootProject.file('gradle/packaged-tests.gradle')

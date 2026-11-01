@@ -1,0 +1,253 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+
+// Actual distribution jars, never production classes/resources directories, supply the mod.
+def packagedDir = rootProject.file(".tmp/agent-game-test/${project.name}-packaged")
+def launcherCache = rootProject.file('.tmp/agent-game-test/launcher-cache')
+def stagedMods = new File(packagedDir, 'mods')
+def digest = { File file, String algorithm ->
+    def md = MessageDigest.getInstance(algorithm)
+    file.withInputStream { stream ->
+        byte[] buffer = new byte[65536]
+        int count
+        while ((count = stream.read(buffer)) != -1) {
+            md.update(buffer, 0, count)
+        }
+    }
+    md.digest().encodeHex().toString()
+}
+def download = { String address, File target, String sha1 ->
+    if (!target.canonicalFile.toPath().startsWith(launcherCache.canonicalFile.toPath())
+            || new URI(address).scheme != 'https') {
+        throw new GradleException('Packaged launcher downloads must use HTTPS and stay inside the task-owned cache')
+    }
+    if (target.isFile() && (!sha1 || digest(target, 'SHA-1') == sha1)) {
+        return target
+    }
+    target.parentFile.mkdirs()
+    def connection = new URI(address).toURL().openConnection()
+    connection.connectTimeout = 20000
+    connection.readTimeout = 45000
+    def partial = new File(target.parentFile, target.name + '.partial')
+    try {
+        connection.inputStream.withCloseable { input -> partial.withOutputStream { it << input } }
+        if (sha1 && digest(partial, 'SHA-1') != sha1) {
+            throw new GradleException("Download checksum mismatch: ${target.name}")
+        }
+        java.nio.file.Files.move(partial.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    } finally {
+        partial.delete()
+    }
+    target
+}
+def mavenChecksum = { String address, String path ->
+    def checksumFile = download(address + '.sha1', new File(launcherCache, 'libraries/' + path + '.sha1'), null)
+    def value = checksumFile.getText('UTF-8').trim().tokenize()[0]
+    if (!(value ==~ /[0-9a-fA-F]{40}/)) {
+        throw new GradleException("Invalid Maven checksum for ${path}")
+    }
+    value.toLowerCase(Locale.ROOT)
+}
+def clearResults = {
+    packagedDir.mkdirs()
+    ['results.txt', 'runtime-tests.xml', 'packaged-inputs.json', 'failure.png'].each {
+        def stale = new File(packagedDir, it)
+        if (stale.exists() && !stale.delete()) {
+            throw new GradleException("Cannot remove stale packaged test evidence: ${stale}")
+        }
+    }
+}
+def stage = { List<File> jars ->
+    stagedMods.mkdirs()
+    // Only this task-owned mods directory is cleaned. Other run files and every normal instance remain untouched.
+    stagedMods.listFiles()?.findAll { it.isFile() && it.name.endsWith('.jar') }?.each {
+        if (!it.delete()) {
+            throw new GradleException("Cannot remove a stale task-owned packaged mod: ${it}")
+        }
+    }
+    def manifest = []
+    jars.each { jar ->
+        if (!jar.isFile()) {
+            throw new GradleException("Missing packaged input: ${jar}")
+        }
+        def destination = new File(stagedMods, jar.name)
+        java.nio.file.Files.copy(jar.toPath(), destination.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        manifest.add([name: destination.name, sha256: digest(destination, 'SHA-256'), source: jar.absolutePath])
+    }
+    new File(packagedDir, 'packaged-inputs.json').setText(JsonOutput.prettyPrint(JsonOutput.toJson([
+        loader: project.name, minecraft: minecraft_version, jars: manifest, stagedAt: java.time.Instant.now().toString()
+    ])) + '\n', 'UTF-8')
+}
+
+if (project.name == 'fabric') {
+    // Applied scripts do not inherit Loom's compile-time imports; reuse its already-loaded task type.
+    def remapType = tasks.named('remapJar').get().getClass().getSuperclass()
+    tasks.register('remapRuntimeTestJar', remapType) {
+        dependsOn tasks.named('runtimeTestJar')
+        inputFile = tasks.named('runtimeTestJar', Jar).flatMap { it.archiveFile }
+        archiveClassifier = 'runtime-tests-intermediary'
+        sourceNamespace = 'named'
+        targetNamespace = 'intermediary'
+        addNestedDependencies = false
+        classpath.from sourceSets.runtimeTest.compileClasspath
+    }
+
+    def launchState = [:]
+    def prepare = tasks.register('preparePackagedClient') {
+        dependsOn 'downloadAssets', 'remapJar', 'remapRuntimeTestJar'
+        doLast {
+            clearResults()
+            def loom = project.extensions.getByName('loom')
+            // Loom 1.8 has no production-run task. Use the official launcher profile and raw client jar.
+            def versionFile = new File(loom.minecraftProvider.workingDir(), 'minecraft-info.json')
+            def version = new JsonSlurper().parse(versionFile)
+            def clientJar = loom.minecraftProvider.minecraftClientJar
+            if (digest(clientJar, 'SHA-1') != version.downloads.client.sha1) {
+                throw new GradleException('Packaged Fabric must launch the original obfuscated Minecraft client jar')
+            }
+            def profileFile = new File(launcherCache, "fabric-${minecraft_version}-${fabric_loader_version}.json")
+            download("https://meta.fabricmc.net/v2/versions/loader/${minecraft_version}/${fabric_loader_version}/profile/json", profileFile, null)
+            def profile = new JsonSlurper().parse(profileFile)
+            if (profile.inheritsFrom != minecraft_version || profile.mainClass != 'net.fabricmc.loader.impl.launch.knot.KnotClient') {
+                throw new GradleException('Unexpected Fabric production launcher metadata')
+            }
+            String os = System.getProperty('os.name').toLowerCase(Locale.ROOT)
+            String osId = os.contains('win') ? 'windows' : os.contains('mac') ? 'osx' : 'linux'
+            def allowed = { library ->
+                if (!library.rules) {
+                    return true
+                }
+                boolean allow = false
+                library.rules.each { rule ->
+                    boolean matches = !rule.os || ((!rule.os.name || rule.os.name == osId)
+                        && (!rule.os.arch || System.getProperty('os.arch').matches(rule.os.arch))
+                        && (!rule.os.version || System.getProperty('os.version').matches(rule.os.version)))
+                    // Feature-specific vanilla libraries are not enabled for this ordinary non-demo test client.
+                    matches &= !rule.features || rule.features.every { key, value -> value == false }
+                    if (matches) {
+                        allow = rule.action == 'allow'
+                    }
+                }
+                allow
+            }
+            def classpath = [clientJar]
+            version.libraries.findAll(allowed).each { library ->
+                def artifact = library.downloads?.artifact
+                if (artifact) {
+                    classpath.add(download(artifact.url as String, new File(launcherCache, 'libraries/' + artifact.path), artifact.sha1 as String))
+                }
+            }
+            profile.libraries.each { library ->
+                def parts = library.name.split(':')
+                def path = parts[0].replace('.', '/') + '/' + parts[1] + '/' + parts[2] + '/' + parts[1] + '-' + parts[2] + '.jar'
+                def address = (library.url ?: 'https://maven.fabricmc.net/') + path
+                def checksum = library.sha1 ?: mavenChecksum(address as String, path as String)
+                classpath.add(download(address as String, new File(launcherCache, 'libraries/' + path), checksum as String))
+            }
+            def apiPath = "net/fabricmc/fabric-api/fabric-api/${fabric_version}/fabric-api-${fabric_version}.jar"
+            def apiAddress = 'https://maven.fabricmc.net/' + apiPath
+            def apiJar = download(apiAddress, new File(launcherCache, 'libraries/' + apiPath), mavenChecksum(apiAddress, apiPath))
+            stage([tasks.named('remapJar').get().archiveFile.get().asFile,
+                    tasks.named('remapRuntimeTestJar').get().archiveFile.get().asFile, apiJar])
+            launchState.classpath = classpath
+            launchState.assetsDir = new File(loom.files.userCache, 'assets')
+            def indexId = version.assetIndex.id as String
+            def plainIndex = new File(launchState.assetsDir, "indexes/${indexId}.json")
+            // Loom 1.8 prefixes its shared index filenames with the Minecraft version.
+            if (!plainIndex.isFile()) {
+                indexId = minecraft_version + '-' + indexId
+            }
+            def assetIndex = new File(launchState.assetsDir, "indexes/${indexId}.json")
+            if (!assetIndex.isFile() || digest(assetIndex, 'SHA-1') != version.assetIndex.sha1) {
+                throw new GradleException('Missing or incorrect production Fabric asset index')
+            }
+            launchState.assetIndex = indexId
+            new File(packagedDir, 'java-tmp').mkdirs()
+        }
+    }
+    tasks.register('runPackagedRegression', JavaExec) {
+        group = 'verification'
+        description = 'Runs obfuscated Minecraft through production Fabric Loader with distributed mod jars.'
+        dependsOn prepare
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+        mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+        workingDir = packagedDir
+        timeout = java.time.Duration.ofMinutes(5)
+        jvmArgs '-Xmx2G', '-Dfabric.development=false', '-Dautoauth.test.packaged=true'
+        systemProperty 'autoauth.test.output', packagedDir.absolutePath
+        systemProperty 'java.io.tmpdir', new File(packagedDir, 'java-tmp').absolutePath
+        doFirst {
+            classpath = files(launchState.classpath)
+            args '--username', 'AutoAuthTest', '--version', minecraft_version,
+                    '--gameDir', packagedDir.absolutePath, '--assetsDir', launchState.assetsDir.absolutePath,
+                    '--assetIndex', launchState.assetIndex, '--uuid', '00000000000000000000000000000001',
+                    '--accessToken', '0', '--userType', 'msa', '--versionType', 'release', '--width', '854', '--height', '480'
+            if (classpath.files.any { it.absolutePath.contains(project.buildDir.absolutePath) }) {
+                throw new GradleException('Packaged Fabric classpath must not include project build outputs')
+            }
+        }
+    }
+} else if (project.name == 'neoforge') {
+    sourceSets {
+        packagedLaunch {
+            // An empty launch source set prevents main/test output directories from shadowing staged jar classes.
+            runtimeClasspath = sourceSets.main.runtimeClasspath.minus(sourceSets.main.output)
+        }
+    }
+    neoForge {
+        runs {
+            packagedRegression {
+                client()
+                sourceSet = sourceSets.packagedLaunch
+                loadedMods = []
+                gameDirectory = packagedDir
+                systemProperty 'autoauth.test.output', packagedDir.absolutePath
+                systemProperty 'autoauth.test.packaged', 'true'
+                programArguments.addAll '--username', 'AutoAuthTest'
+            }
+        }
+    }
+    def prepare = tasks.register('preparePackagedClient') {
+        dependsOn 'jar', 'runtimeTestJar'
+        doLast {
+            clearResults()
+            stage([tasks.named('jar').get().archiveFile.get().asFile, tasks.named('runtimeTestJar').get().archiveFile.get().asFile])
+        }
+    }
+    tasks.named('runPackagedRegression', JavaExec) {
+        dependsOn prepare
+        timeout = java.time.Duration.ofMinutes(5)
+        doFirst {
+            def forbidden = (sourceSets.main.output.files + sourceSets.runtimeTest.output.files)*.canonicalFile
+            if (classpath.files.any { forbidden.contains(it.canonicalFile) }) {
+                throw new GradleException('Packaged NeoForge classpath contains project mod outputs')
+            }
+        }
+    }
+}
+
+tasks.register('packagedClientTest') {
+    group = 'verification'
+    description = 'Verifies fresh actual-client results while loading distributed jars only.'
+    dependsOn 'runPackagedRegression'
+    doLast {
+        def result = new File(packagedDir, 'results.txt')
+        def xml = new File(packagedDir, 'runtime-tests.xml')
+        def manifest = new File(packagedDir, 'packaged-inputs.json')
+        if (!manifest.isFile() || !result.isFile() || !xml.isFile() || !result.text.contains('ALL CLIENT CHECKS PASSED')) {
+            throw new GradleException("Missing or failed packaged ${project.name} client results in ${packagedDir}")
+        }
+        def suite = new XmlSlurper().parse(xml)
+        if (suite.@tests.toInteger() <= 0 || suite.@failures.toInteger() != 0 || suite.@errors.toInteger() != 0
+                || (suite.@skipped.toString() && suite.@skipped.toInteger() != 0)) {
+            throw new GradleException("Invalid or failing packaged ${project.name} scenario manifest")
+        }
+        def required = new JsonSlurper().parse(rootProject.file('runtime-tests/scenarios.json'))
+        def observed = suite.testcase.collect { it.@name.toString() }
+        if (suite.@tests.toInteger() != required.size() || observed.size() != required.size() || observed.toSet() != required.toSet()) {
+            throw new GradleException("Packaged ${project.name} is missing required scenarios: ${required - observed}")
+        }
+        logger.lifecycle(result.text)
+    }
+}

@@ -1,0 +1,21 @@
+accessWidener	v2	named
+
+accessible	field	net/minecraft/client/Minecraft	user	Lnet/minecraft/client/User;
+mutable	field	net/minecraft/client/Minecraft	user	Lnet/minecraft/client/User;
+
+accessible	field	net/minecraft/client/Minecraft	userApiService	Lcom/mojang/authlib/minecraft/UserApiService;
+mutable	field	net/minecraft/client/Minecraft	userApiService	Lcom/mojang/authlib/minecraft/UserApiService;
+
+accessible	field	net/minecraft/client/Minecraft	playerSocialManager	Lnet/minecraft/client/gui/screens/social/PlayerSocialManager;
+mutable	field	net/minecraft/client/Minecraft	playerSocialManager	Lnet/minecraft/client/gui/screens/social/PlayerSocialManager;
+
+accessible	field	net/minecraft/client/Minecraft	profileKeyPairManager	Lnet/minecraft/client/multiplayer/ProfileKeyPairManager;
+mutable	field	net/minecraft/client/Minecraft	profileKeyPairManager	Lnet/minecraft/client/multiplayer/ProfileKeyPairManager;
+
+accessible	field	net/minecraft/client/Minecraft	reportingContext	Lnet/minecraft/client/multiplayer/chat/report/ReportingContext;
+mutable	field	net/minecraft/client/Minecraft	reportingContext	Lnet/minecraft/client/multiplayer/chat/report/ReportingContext;
+
+accessible	field	net/minecraft/client/Minecraft	realmsDataFetcher	Lcom/mojang/realmsclient/gui/RealmsDataFetcher;
+mutable	field	net/minecraft/client/Minecraft	realmsDataFetcher	Lcom/mojang/realmsclient/gui/RealmsDataFetcher;
+
+accessible	field	net/minecraft/client/multiplayer/chat/report/ReportingContext	environment	Lnet/minecraft/client/multiplayer/chat/report/ReportEnvironment;

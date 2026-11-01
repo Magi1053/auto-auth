@@ -1,0 +1,23 @@
+{
+    "required": true,
+    "minVersion": "0.8",
+    "package": "com.skcraft.autoauth.runtimetest.mixin",
+    "refmap": "autoauth.tests.refmap.json",
+    "compatibilityLevel": "JAVA_21",
+    "client": [
+        "RuntimeTickMixin",
+        "RuntimeMinecraftAccess",
+        "RuntimeStatusAccess",
+        "RuntimeSessionMixin",
+        "RuntimeStatusMixin",
+        "RuntimeAuthMixin",
+        "RuntimeConnectMixin",
+        "RuntimeDisconnectAccess",
+        "RuntimeRealmsMixin",
+        "RuntimeSessionServiceMixin",
+        "RuntimeAuthenticationServiceMixin"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

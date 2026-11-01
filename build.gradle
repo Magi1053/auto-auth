@@ -1,0 +1,18 @@
+plugins {
+    // see https://fabricmc.net/develop/ for new versions
+    id 'fabric-loom' version '1.8.13' apply false
+    // see https://projects.neoforged.net/neoforged/moddevgradle for new versions
+    id 'net.neoforged.moddev' version '2.0.49-beta' apply false
+}
+
+apply from: 'gradle/verification.gradle'
+
+// Resolve the Linux native variants as well when generating dependency checksums
+// on Windows, so hosted graphical CI has the same verification coverage.
+repositories { mavenCentral() }
+configurations { linuxVerificationNatives }
+dependencies {
+    ['lwjgl', 'lwjgl-freetype', 'lwjgl-glfw', 'lwjgl-jemalloc', 'lwjgl-openal', 'lwjgl-opengl', 'lwjgl-stb', 'lwjgl-tinyfd'].each {
+        linuxVerificationNatives "org.lwjgl:${it}:3.3.3:natives-linux"
+    }
+}

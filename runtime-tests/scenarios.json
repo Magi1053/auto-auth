@@ -1,0 +1,11 @@
+[
+    "session-consistency",
+    "explicit-account-switch",
+    "connect-status-gates",
+    "pending-server-resume-and-cancel",
+    "disconnect-overloads",
+    "local-connection-failure",
+    "realms-cached-auth-recovery",
+    "account-list-settings-navigation",
+    "browser-add-and-cancel"
+]

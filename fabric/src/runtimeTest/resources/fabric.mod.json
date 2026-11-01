@@ -1,0 +1,9 @@
+{
+    "schemaVersion": 1,
+    "id": "autoauth_tests",
+    "version": "1.0.0",
+    "name": "Auto-Auth regression tests (not for distribution)",
+    "environment": "client",
+    "mixins": ["autoauth.runtime-tests.mixins.json"],
+    "depends": { "autoauth": "*", "fabricloader": ">=0.16.14", "minecraft": "1.21.1" }
+}

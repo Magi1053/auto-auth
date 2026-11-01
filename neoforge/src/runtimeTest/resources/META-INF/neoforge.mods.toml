@@ -1,0 +1,17 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "autoauth_tests"
+version = "1.0.0"
+displayName = "Auto-Auth regression tests (not for distribution)"
+
+[[mixins]]
+config = "autoauth.runtime-tests.mixins.json"
+
+[[dependencies.autoauth_tests]]
+modId = "autoauth"
+type = "required"
+versionRange = "[1.0,)"
+side = "CLIENT"
