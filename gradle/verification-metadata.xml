@@ -3,6 +3,9 @@
    <configuration>
       <verify-metadata>true</verify-metadata>
       <verify-signatures>false</verify-signatures>
+      <trusted-artifacts>
+         <trust group="loom" name="mappings" reason="Locally generated layered mappings archive has machine-dependent ZIP metadata"/>
+      </trusted-artifacts>
    </configuration>
    <components>
       <component group="ca.weblite" name="java-objc-bridge" version="1.1">
