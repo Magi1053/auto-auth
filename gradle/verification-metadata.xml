@@ -5,6 +5,8 @@
       <verify-signatures>false</verify-signatures>
       <trusted-artifacts>
          <trust group="loom" name="mappings" reason="Locally generated layered mappings archive has machine-dependent ZIP metadata"/>
+         <trust group="loom_mappings_.*" regex="true" reason="Locally remapped artifacts generated from verified dependencies"/>
+         <trust group="net.minecraft" name="minecraft-.*" regex="true" reason="Loom generated Minecraft merge and remap outputs"/>
       </trusted-artifacts>
    </configuration>
    <components>
