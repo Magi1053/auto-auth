@@ -314,7 +314,8 @@ public final class RuntimeSuite {
             fixture.setSoTimeout(15_000);
             CompletableFuture<Void> accepted = CompletableFuture.runAsync(() -> {
                 try (var socket = fixture.accept()) {
-                    // Closing a real accepted loopback socket triggers vanilla's connection failure path.
+                    // Force a reset on both epoll and NIO instead of relying on half-close timing.
+                    socket.setSoLinger(true, 0);
                 } catch (java.io.IOException error) {
                     throw new java.util.concurrent.CompletionException(error);
                 }
