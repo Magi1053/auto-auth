@@ -100,7 +100,10 @@ if (project.name == 'fabric') {
             clearResults()
             def loom = project.extensions.getByName('loom')
             // Loom 1.8 has no production-run task. Use the official launcher profile and raw client jar.
-            def versionFile = new File(loom.minecraftProvider.workingDir(), 'minecraft-info.json')
+            def versionFile = new File(loom.minecraftProvider.workingDir(), 'mojang_minecraft_info.json')
+            if (!versionFile.isFile()) {
+                versionFile = new File(loom.minecraftProvider.workingDir(), 'minecraft-info.json')
+            }
             def version = new JsonSlurper().parse(versionFile)
             def clientJar = loom.minecraftProvider.minecraftClientJar
             if (digest(clientJar, 'SHA-1') != version.downloads.client.sha1) {
