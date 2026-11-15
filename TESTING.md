@@ -63,6 +63,10 @@ Expected fresh outputs:
 
 The scenarios use synthetic identity/services at the provider boundary, while exercising production session installation, hooks and widgets. They check identity/profile/permissions, Realms availability invalidation, constructor cleanup, waiting-parent handling, cancellation and account management. A local/offline connection fixture checks connection lifecycle; it does not establish a real online-mode provider handshake.
 
+`join-authentication-service-errors` invokes vanilla's real join-authentication handler with a synthetic session service. It reproduces Authlib's malformed-HTML exception and checks the translated service-unavailable text, preserved invalid-session and ordinary rejection messages, and successful joins with automatic recovery both enabled and disabled. This tests the production handshake mixin on both loaders without contacting Mojang.
+
+The test mod substitutes a synthetic session service when Minecraft creates it, before startup profile lookup. Profiles have no remote textures, so startup and account-list skin loading cannot request live profile or texture services, including on NeoForge where Authlib resides in a separate bootstrap module. Distributed session-service and account-head loading remain unchanged.
+
 Require a successful Gradle process, a fresh complete scenario result and `ALL CLIENT CHECKS PASSED`. A crash, deadline, missing XML/result, missing scenario or failed assertion is failure even if another scenario passed. Preserve diagnostic screenshots on failure where available; do not reuse an earlier result to interpret a later run.
 
 The harness is isolated from the ordinary development runs. Its test classes/resources/mod metadata are outside `main` source sets, and `verifyArtifacts` rejects their presence in shipped jars.

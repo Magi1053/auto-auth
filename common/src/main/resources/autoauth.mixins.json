@@ -9,6 +9,7 @@
         "MinecraftSessionAccess",
         "RealmsAvailabilityAccess",
         "ConnectScreenMixin",
+        "ClientHandshakePacketListenerMixin",
         "DisconnectedScreenMixin",
         "MinecraftClientMixin",
         "MultiplayerScreenMixin",

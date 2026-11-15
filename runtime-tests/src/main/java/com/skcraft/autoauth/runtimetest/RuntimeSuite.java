@@ -14,12 +14,18 @@ import com.skcraft.autoauth.gui.SettingsScreen;
 import com.skcraft.autoauth.gui.WaitingForLoginScreen;
 import com.skcraft.autoauth.mixin.RealmsAvailabilityAccess;
 import com.skcraft.autoauth.runtimetest.mixin.RuntimeDisconnectAccess;
+import com.skcraft.autoauth.runtimetest.mixin.RuntimeHandshakeAccess;
 import com.skcraft.autoauth.runtimetest.mixin.RuntimeMinecraftAccess;
 import com.skcraft.autoauth.runtimetest.mixin.RuntimeStatusAccess;
 import com.skcraft.autoauth.session.PendingJoins;
 import com.skcraft.autoauth.session.SessionOrchestrator;
 import com.mojang.realmsclient.RealmsAvailability;
 import com.mojang.realmsclient.RealmsMainScreen;
+import com.mojang.authlib.exceptions.AuthenticationException;
+import com.mojang.authlib.exceptions.InvalidCredentialsException;
+import com.mojang.authlib.exceptions.MinecraftClientException;
+import com.mojang.authlib.minecraft.MinecraftSessionService;
+import com.mojang.authlib.minecraft.client.ObjectMapper;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.AbstractSelectionList;
@@ -33,13 +39,17 @@ import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl;
 import net.minecraft.client.multiplayer.TransferState;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.network.DisconnectionDetails;
+import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.PacketFlow;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.ArrayList;
@@ -89,6 +99,7 @@ public final class RuntimeSuite {
                     new Scenario("connect-status-gates", RuntimeSuite::connectGates),
                     new Scenario("pending-server-resume-and-cancel", RuntimeSuite::serverRecovery),
                     new Scenario("disconnect-overloads", RuntimeSuite::disconnects),
+                    new Scenario("join-authentication-service-errors", RuntimeSuite::joinAuthenticationServiceErrors),
                     new Scenario("local-connection-failure", RuntimeSuite::localConnectionFailure),
                     new Scenario("realms-cached-auth-recovery", RuntimeSuite::realms),
                     new Scenario("account-list-settings-navigation", RuntimeSuite::accountUi),
@@ -278,6 +289,61 @@ public final class RuntimeSuite {
             back.onPress();
             require(Minecraft.getInstance().screen == original, "disconnect Back did not reach original parent");
         });
+    }
+
+    private static CompletableFuture<Void> joinAuthenticationServiceErrors() {
+        var mc = Minecraft.getInstance();
+        var listener = new ClientHandshakePacketListenerImpl(new Connection(PacketFlow.CLIENTBOUND), mc,
+                null, original, false, null, ignored -> { }, null);
+        var handshake = (RuntimeHandshakeAccess) (Object) listener;
+        String html = "<!DOCTYPE html><html><head><style type='text/css'>body { font-family: Arial; }</style>"
+                + "<title>Service unavailable</title></head><body>503</body></html>";
+        AuthenticationException malformed;
+        try {
+            ObjectMapper.create().readValue(html, Object.class);
+            throw new AssertionError("HTML fixture unexpectedly parsed as JSON");
+        } catch (MinecraftClientException error) {
+            malformed = error.toAuthenticationException();
+        }
+        require(malformed.getMessage().contains(html), "fixture did not reproduce Authlib's response leak");
+        String expectedOutage = Component.translatable("disconnect.loginFailedInfo",
+                Component.translatable("disconnect.loginFailedInfo.serversUnavailable")).getString();
+        String expectedInvalid = Component.translatable("disconnect.loginFailedInfo",
+                Component.translatable("disconnect.loginFailedInfo.invalidSession")).getString();
+        String expectedDenied = Component.translatable("disconnect.loginFailedInfo", "Synthetic access denied").getString();
+        try {
+            for (boolean automatic : new boolean[] { false, true }) {
+                ModConfig.get().setAuto(automatic);
+                RuntimeFixtures.joinSessionService = joinService(malformed);
+                Component reason = handshake.autoauthTest$authenticateServer("synthetic-server-hash");
+                require(reason != null && reason.getString().equals(expectedOutage), "malformed response did not use vanilla service-unavailable text");
+                require(!reason.getString().contains("<") && !reason.getString().contains("Failed to read value"), "provider response leaked into disconnect text");
+
+                RuntimeFixtures.joinSessionService = joinService(new InvalidCredentialsException("Synthetic invalid session"));
+                require(handshake.autoauthTest$authenticateServer("synthetic-server-hash").getString().equals(expectedInvalid),
+                        "invalid session was changed into a service outage");
+                RuntimeFixtures.joinSessionService = joinService(new AuthenticationException("Synthetic access denied"));
+                require(handshake.autoauthTest$authenticateServer("synthetic-server-hash").getString().equals(expectedDenied),
+                        "ordinary authentication rejection message changed");
+                RuntimeFixtures.joinSessionService = joinService(null);
+                require(handshake.autoauthTest$authenticateServer("synthetic-server-hash") == null, "successful authentication no longer succeeds");
+            }
+        } finally {
+            RuntimeFixtures.joinSessionService = null;
+            ModConfig.get().setAuto(false);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private static MinecraftSessionService joinService(AuthenticationException failure) {
+        return (MinecraftSessionService) Proxy.newProxyInstance(MinecraftSessionService.class.getClassLoader(),
+                new Class<?>[] { MinecraftSessionService.class }, (proxy, method, args) -> {
+                    require(method.getName().equals("joinServer"), "join fixture received an unexpected provider call");
+                    require(Minecraft.getInstance().getUser().getProfileId().equals(args[0]), "join fixture received the wrong profile");
+                    require("synthetic-server-hash".equals(args[2]), "join fixture received the wrong server hash");
+                    if (failure != null) throw failure;
+                    return null;
+                });
     }
 
     private static CompletableFuture<Void> realms() {

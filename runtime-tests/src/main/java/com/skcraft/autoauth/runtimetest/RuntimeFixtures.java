@@ -4,6 +4,8 @@ import com.skcraft.autoauth.auth.AuthStatus;
 import com.skcraft.autoauth.auth.MicrosoftAuth;
 import com.skcraft.autoauth.auth.SessionApplier;
 import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.minecraft.MinecraftSessionService;
+import com.mojang.authlib.minecraft.MinecraftProfileTextures;
 import com.mojang.authlib.minecraft.UserApiService;
 import com.mojang.authlib.yggdrasil.ProfileResult;
 import net.minecraft.client.User;
@@ -35,10 +37,24 @@ public final class RuntimeFixtures {
     public static final AtomicInteger connects = new AtomicInteger();
     public static volatile ConnectCall connect;
     public static volatile boolean allowLocalSocket;
+    public static volatile MinecraftSessionService joinSessionService;
 
     public record ConnectCall(Screen parent, ServerAddress address, ServerData data, boolean quickPlay, TransferState transfer) { }
 
     private RuntimeFixtures() { }
+
+    public static MinecraftSessionService sessionService() {
+        return (MinecraftSessionService) Proxy.newProxyInstance(MinecraftSessionService.class.getClassLoader(),
+                new Class<?>[] { MinecraftSessionService.class }, (proxy, method, args) -> switch (method.getName()) {
+                    case "fetchProfile" -> new ProfileResult(new GameProfile((UUID) args[0], "FixturePlayer"));
+                    case "getTextures", "unpackTextures" -> MinecraftProfileTextures.EMPTY;
+                    case "getPackedTextures" -> null;
+                    case "toString" -> "SyntheticMinecraftSessionService";
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    default -> throw new AssertionError("Unexpected synthetic session-service call: " + method.getName());
+                });
+    }
 
     public static User user(UUID id, String name) {
         return new User(name, id, "synthetic-access-" + name, Optional.empty(), Optional.empty(), User.Type.MSA);

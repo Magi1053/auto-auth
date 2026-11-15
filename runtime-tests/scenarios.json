@@ -4,6 +4,7 @@
     "connect-status-gates",
     "pending-server-resume-and-cancel",
     "disconnect-overloads",
+    "join-authentication-service-errors",
     "local-connection-failure",
     "realms-cached-auth-recovery",
     "account-list-settings-navigation",

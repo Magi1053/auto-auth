@@ -21,7 +21,7 @@ public final class SessionProbe {
         } catch (AuthenticationUnavailableException e) {
             return AuthStatus.UNKNOWN;
         } catch (AuthenticationException e) {
-            return AuthStatus.INVALID;
+            return AuthenticationErrors.normalize(e) instanceof AuthenticationUnavailableException ? AuthStatus.UNKNOWN : AuthStatus.INVALID;
         } catch (Exception e) {
             return AuthStatus.UNKNOWN;
         }

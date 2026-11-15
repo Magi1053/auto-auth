@@ -16,6 +16,8 @@ Automatic recovery prefers the current profile's saved account, then the default
 
 A rejected token or missing session can pause a connection when automatic mode is enabled. `CHECKING` and `UNKNOWN` never block a connection. Service outages remain unknown instead of being treated as rejected credentials. Transient refresh failures have a 30-second cooldown and stop after three failures; permanent failures require an explicit retry or a new saved login.
 
+If Minecraft's join authentication receives HTML or another malformed service response, Auto-Auth shows Minecraft's translated authentication-service-unavailable message instead of dumping the response into the disconnect screen. Session checks treat these responses as unknown, preserving the saved login. This handling also applies when automatic recovery is disabled.
+
 ## Saved data
 
 Configuration lives at `<gameDir>/config/autoauth/config.json`:

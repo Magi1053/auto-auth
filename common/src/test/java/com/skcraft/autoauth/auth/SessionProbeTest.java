@@ -36,4 +36,10 @@ class SessionProbeTest {
     @Test void snapshotToStringDoesNotExposeCredential() {
         assertFalse(valid().toString().contains("synthetic-token"));
     }
+
+    @Test void malformedServiceResponseDoesNotRejectTheSavedSession() {
+        assertEquals(AuthStatus.UNKNOWN, SessionProbe.check(valid(), identity -> {
+            throw AuthenticationErrorsTest.malformedResponse("<html><title>Service unavailable</title></html>");
+        }));
+    }
 }
