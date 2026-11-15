@@ -1,0 +1,42 @@
+name: Read Modrinth release metadata
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published Modrinth version number, including loader suffix
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read published file URLs and checksums
+        env:
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: python
+        run: |
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          project = urllib.parse.quote(os.environ["MODRINTH_PROJECT_ID"], safe="")
+          request = urllib.request.Request(
+              f"https://api.modrinth.com/v2/project/{project}/version",
+              headers={
+                  "Authorization": os.environ["MODRINTH_TOKEN"],
+                  "User-Agent": "Magi1053/auto-auth release metadata",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              versions = json.load(response)
+          matches = [version for version in versions if version["version_number"] == os.environ["RELEASE_VERSION"]]
+          if len(matches) != 1:
+              raise RuntimeError(f"Expected one published version; found {len(matches)}")
+          version = matches[0]
+          metadata = {key: version[key] for key in ("id", "project_id", "version_number", "loaders", "game_versions", "files")}
+          print("MODRINTH_RELEASE_METADATA=" + json.dumps(metadata, separators=(",", ":")))
