@@ -17,6 +17,7 @@ import com.skcraft.autoauth.runtimetest.mixin.RuntimeDisconnectAccess;
 import com.skcraft.autoauth.runtimetest.mixin.RuntimeHandshakeAccess;
 import com.skcraft.autoauth.runtimetest.mixin.RuntimeMinecraftAccess;
 import com.skcraft.autoauth.runtimetest.mixin.RuntimeStatusAccess;
+import com.skcraft.autoauth.runtimetest.mixin.RuntimeStatusTrackerAccess;
 import com.skcraft.autoauth.session.PendingJoins;
 import com.skcraft.autoauth.session.SessionOrchestrator;
 import com.mojang.realmsclient.RealmsAvailability;
@@ -98,6 +99,12 @@ public final class RuntimeSuite {
                     new Scenario("explicit-account-switch", RuntimeSuite::explicitSwitch),
                     new Scenario("connect-status-gates", RuntimeSuite::connectGates),
                     new Scenario("pending-server-resume-and-cancel", RuntimeSuite::serverRecovery),
+                    new Scenario("invalid-status-reprobe", RuntimeSuite::invalidStatusReprobe),
+                    new Scenario("rejected-server-join-recovery", () -> RuntimeServerJoinTests.recover(original, false)),
+                    new Scenario("checking-server-join-recovery", () -> RuntimeServerJoinTests.recover(original, true)),
+                    new Scenario("server-join-recovery-exclusions", () -> RuntimeServerJoinTests.exclusions(original)),
+                    new Scenario("server-join-recovery-cancel", () -> RuntimeServerJoinTests.cancel(original)),
+                    new Scenario("server-join-recovery-bounded", () -> RuntimeServerJoinTests.bounded(original)),
                     new Scenario("disconnect-overloads", RuntimeSuite::disconnects),
                     new Scenario("join-authentication-service-errors", RuntimeSuite::joinAuthenticationServiceErrors),
                     new Scenario("local-connection-failure", RuntimeSuite::localConnectionFailure),
@@ -264,6 +271,37 @@ public final class RuntimeSuite {
                 require(!PendingJoins.isPending() && Minecraft.getInstance().screen == original, "cancel failed navigation");
             }));
         });
+    }
+
+    private static CompletableFuture<Void> invalidStatusReprobe() {
+        resetAccounts();
+        ModConfig.get().setAuto(true);
+        RuntimeFixtures.probe = AuthStatus.INVALID;
+        SessionApplier.installPreparedOnClientThread(RuntimeFixtures.prepared(RuntimeFixtures.user(RuntimeFixtures.A, "Alice")));
+        setStatus(AuthStatus.INVALID);
+        int connects = RuntimeFixtures.connects.get();
+        int refreshes = RuntimeFixtures.refreshes.get();
+        var address = ServerAddress.parseString("127.0.0.1:25563");
+        var data = new ServerData("Reprobe fixture", "127.0.0.1:25563", ServerData.Type.OTHER);
+        var transfer = new TransferState(Map.of());
+        ConnectScreen.startConnecting(original, Minecraft.getInstance(), address, data, true, transfer);
+        return waitFor(() -> !SessionOrchestrator.get().isBusy()
+                && AuthStatusService.get().getStatus() == AuthStatus.INVALID
+                && SessionOrchestrator.get().progressMessage().equals("autoauth.progress.failed"), () -> {
+            require(RuntimeFixtures.refreshes.get() == refreshes + 1, "rejected verification created repeated refreshes");
+            require(RuntimeFixtures.connects.get() == connects, "rejected verification resumed the server prematurely");
+            RuntimeFixtures.probe = AuthStatus.ONLINE;
+            var tracker = ((RuntimeStatusAccess) (Object) AuthStatusService.get()).autoauthTest$tracker();
+            ((RuntimeStatusTrackerAccess) (Object) tracker).autoauthTest$checkedAt(0);
+        }).thenCompose(ignored -> waitFor(() -> RuntimeFixtures.connects.get() == connects + 1, () -> {
+            require(AuthStatusService.get().getStatus() == AuthStatus.ONLINE, "stale invalid status was not automatically rechecked");
+            require(RuntimeFixtures.refreshes.get() == refreshes + 1, "provider recovery unnecessarily refreshed the saved login again");
+            require(!PendingJoins.isPending(), "successful automatic reprobe retained the pending join");
+            var call = RuntimeFixtures.connect;
+            require(call.parent() == original && call.data() == data && call.transfer() == transfer && call.quickPlay(),
+                    "automatic reprobe changed the pending server parameters");
+            Minecraft.getInstance().setScreen(original);
+        })).whenComplete((ignored, failure) -> RuntimeFixtures.probe = AuthStatus.ONLINE);
     }
 
     private static CompletableFuture<Void> disconnects() {
@@ -461,7 +499,7 @@ public final class RuntimeSuite {
         }));
     }
 
-    private static void resetAccounts() {
+    static void resetAccounts() {
         SessionOrchestrator.get().cancelReauth();
         PendingJoins.cancel();
         // Independent scenarios begin from a known verified period, then induce their own expiration.
@@ -472,7 +510,7 @@ public final class RuntimeSuite {
         ModConfig.get().upsertAccount(new AccountRecord("synthetic-access-Bob", "synthetic-refresh-Bob", RuntimeFixtures.B, "Bob"));
     }
 
-    private static void setStatus(AuthStatus status) {
+    static void setStatus(AuthStatus status) {
         ((RuntimeStatusAccess) (Object) AuthStatusService.get()).autoauthTest$tracker().invalidate(status);
     }
 
@@ -502,18 +540,18 @@ public final class RuntimeSuite {
         screen.mouseReleased(x, y, 0);
     }
 
-    private static CompletableFuture<Void> afterTicks(int delay, Runnable action) {
+    static CompletableFuture<Void> afterTicks(int delay, Runnable action) {
         int due = ticks + delay;
         return waitFor(() -> ticks >= due, action);
     }
 
-    private static CompletableFuture<Void> waitFor(BooleanSupplier ready, Runnable action) {
+    static CompletableFuture<Void> waitFor(BooleanSupplier ready, Runnable action) {
         CompletableFuture<Void> done = new CompletableFuture<>();
         Minecraft.getInstance().execute(() -> waits.add(new Wait(ready, action, done, ticks + 400)));
         return done;
     }
 
-    private static void require(boolean condition, String message) {
+    static void require(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
     }
 

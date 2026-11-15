@@ -20,7 +20,7 @@ Server-side authentication, password collection, token/cookie import and automat
 - `INVALID`: rejected credentials, absent join confirmation or a different confirmed profile UUID. Automatic mode can intercept.
 - `OFFLINE`: missing profile/user, unsupported account type or an unusable token (`null`, blank, `0`, case-insensitive `null` string). Automatic mode can intercept.
 
-The client captures a user/service snapshot before dispatching the probe. The worker uses a random server ID and never reads the mutable Minecraft user. Authentication-unavailable and unexpected transport failures produce `UNKNOWN`; credential rejection produces `INVALID`.
+The client captures a user/service snapshot before dispatching the probe. The worker uses a random server ID and never reads the mutable Minecraft user. Authentication-unavailable, malformed provider responses and unexpected transport failures produce `UNKNOWN`; credential rejection produces `INVALID`.
 
 Checks share one in-flight probe per session generation. Session replacement or explicit rejection invalidates that generation; an old result cannot publish into the new session. Relevant menu ticks refresh an aged status after 60 seconds, including an unknown outage result, instead of hammering the service every tick. Initialization, a disconnect, a manual check and successful replacement also request checks. Neither `CHECKING` nor `UNKNOWN` is a reason to stall a join.
 
@@ -43,7 +43,7 @@ Failure to retire old telemetry resources after commit is logged without convert
 
 Only one active recovery attempt is admitted at a time, including explicit requests. Manual selection takes a UUID and never falls back to a different account. Automatic selection prefers current profile UUID, then default UUID, then the sole saved account. No match or no refresh token exposes an account action.
 
-Transient failures retry no earlier than 30 seconds after failure. After three failed attempts, automatic retries stop until explicit Retry or a subsequently verified online state resets recovery. Revoked credentials, missing accounts, storage failure, mismatched identity and other permanent failures require user action immediately. A newly applied credential that the verification probe rejects also requires user action; success at the refresh endpoint must not create an infinite refresh/verification loop.
+Transient failures retry no earlier than 30 seconds after failure. After three failed attempts, automatic retries stop until explicit Retry or a subsequently verified online state resets recovery. Revoked credentials, missing accounts, storage failure, mismatched identity and other permanent failures require user action immediately. A newly applied credential that the verification probe rejects blocks further automatic token refreshes; status checks continue at the normal freshness interval so a recovered session can proceed without manual status refresh. Success at the refresh endpoint must not create an infinite refresh/verification loop.
 
 A successful online verification permits recovery from a later expiration. Explicit Retry resets the retry budget but cannot start a concurrent operation. Generation changes discard stale/cancelled completions and prohibit late session installation. Shutdown cancels result ownership and pending joins. Network cancellation of an already running refresh is separate from cancelling a pending connection.
 
@@ -57,6 +57,8 @@ When automatic mode is enabled and status is `INVALID` or `OFFLINE`:
 4. Once verified `ONLINE` and not busy, consume the pending request before invoking `startConnecting` once with the same captured parameters.
 
 Pending server and Realms requests are mutually exclusive. Waiting-screen Cancel/Escape, disconnect and shutdown clear the pending request. A cancelled connection never resumes even if its credential refresh finishes later. Disabling automatic mode while waiting clears the request and returns to the unwrapped parent. Opening account management does not resume a connection behind that UI; resumption occurs after returning to its waiting screen.
+
+If the actual server-join authentication rejects credentials while the cached status still permits connection, invalidate that cached status and recover through the waiting screen. Retain the original parent, address, server data, quickPlay flag and transfer state. Recovery only takes over the current, uncancelled connection, and only for a local invalid-credentials exception. Outages, permission errors, LAN/Realms connections and unrelated server disconnects keep their existing handling. Each requested server join can automatically resume after credential recovery only once; its resumed connection retains that limit. A new explicit join or Retry starts a new recovery allowance. Transient refresh failures retain the bounded retry policy above.
 
 All disconnect constructor overloads delegate through the canonical `DisconnectionDetails` constructor. Its parent is unwrapped and pending joins are cancelled. A disconnect parent must never remain an abandoned waiting screen.
 

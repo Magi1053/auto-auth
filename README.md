@@ -18,6 +18,8 @@ A rejected token or missing session can pause a connection when automatic mode i
 
 If Minecraft's join authentication receives HTML or another malformed service response, Auto-Auth shows Minecraft's translated authentication-service-unavailable message instead of dumping the response into the disconnect screen. Session checks treat these responses as unknown, preserving the saved login. This handling also applies when automatic recovery is disabled.
 
+If the session expires after the last status check, a rejected server join automatically refreshes the saved account and retries the same connection once. Cancelling stops that retry, and repeated rejection keeps the normal login error. Invalid sessions continue receiving periodic status checks, so a recovered session can proceed without opening Accounts or pressing Check status.
+
 ## Saved data
 
 Configuration lives at `<gameDir>/config/autoauth/config.json`:

@@ -35,6 +35,7 @@ public final class RuntimeFixtures {
     public static final AtomicInteger realmConstructors = new AtomicInteger();
     public static final AtomicInteger availabilityChecks = new AtomicInteger();
     public static final AtomicInteger connects = new AtomicInteger();
+    public static final AtomicInteger refreshes = new AtomicInteger();
     public static volatile ConnectCall connect;
     public static volatile boolean allowLocalSocket;
     public static volatile MinecraftSessionService joinSessionService;
@@ -82,6 +83,7 @@ public final class RuntimeFixtures {
     }
 
     public static MicrosoftAuth.AuthResult refresh(String token) {
+        refreshes.incrementAndGet();
         lastRefresh = token;
         CompletableFuture<MicrosoftAuth.AuthResult> barrier = refreshBarrier;
         if (barrier != null) return barrier.join();

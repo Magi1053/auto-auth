@@ -9,6 +9,7 @@ import com.skcraft.autoauth.config.ModConfig;
 import com.skcraft.autoauth.gui.RealmsWaitingScreen;
 import com.skcraft.autoauth.gui.ServerWaitingScreen;
 import com.skcraft.autoauth.gui.WaitingScreen;
+import com.skcraft.autoauth.mixin.ConnectScreenAccess;
 import com.mojang.authlib.exceptions.AuthenticationUnavailableException;
 import com.mojang.realmsclient.RealmsMainScreen;
 import net.minecraft.Util;
@@ -16,6 +17,10 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.TransferState;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
+import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import java.io.IOException;
 import java.util.Objects;
@@ -26,7 +31,13 @@ import java.util.concurrent.CompletionException;
 public final class SessionOrchestrator {
     private static final SessionOrchestrator INSTANCE = new SessionOrchestrator();
     private boolean realmsRecoveryAttempted;
+    private boolean serverRecoveryAttempted;
+    private boolean resumingServerJoin;
+    private ServerAttempt serverAttempt;
     private UUID manuallySelectedAccount;
+
+    private record ServerAttempt(ConnectScreen screen, Screen parent, ServerAddress address,
+            ServerData data, boolean quickPlay, TransferState transfer) { }
     private final RecoveryController recovery = new RecoveryController(
             task -> Minecraft.getInstance().execute(task), System::currentTimeMillis,
             account -> CompletableFuture.supplyAsync(() -> {
@@ -69,6 +80,9 @@ public final class SessionOrchestrator {
         } else if (status.needsReauth() && ModConfig.get().auto) {
             recovery.verificationRejected();
             attemptReauth(false);
+            // A rejected verification blocks further refreshes, but the current token may
+            // become valid later. Keep probing instead of requiring the Accounts button.
+            if (!recovery.isBusy()) statusService.refreshIfStale();
         } else if (!recovery.isBusy()) {
             statusService.refreshIfStale();
         }
@@ -88,8 +102,46 @@ public final class SessionOrchestrator {
         var account = RecoveryController.select(selectedAccount, user == null ? null : user.getProfileId(),
                 user == null ? null : user.getName(), config.defaultUuid, accounts);
         manuallySelectedAccount = selectedAccount;
-        if (force) realmsRecoveryAttempted = false;
-        recovery.attempt(account, force);
+        if (force) {
+            realmsRecoveryAttempted = false;
+            serverRecoveryAttempted = false;
+        }
+        if (recovery.attempt(account, force) && PendingJoins.isPendingServer()) serverRecoveryAttempted = true;
+    }
+
+    /** A fresh connection request may recover once; automatic resumption retains that limit. */
+    public void beginServerAttempt() {
+        serverAttempt = null;
+        if (!resumingServerJoin) serverRecoveryAttempted = false;
+    }
+
+    public void rememberServerAttempt(ConnectScreen screen, Screen parent, ServerAddress address,
+            ServerData data, boolean quickPlay, TransferState transfer) {
+        serverAttempt = new ServerAttempt(screen, PendingJoins.unwrapWaitingParent(parent), address, data, quickPlay, transfer);
+    }
+
+    /** Called on the client thread when the login connection has actually disconnected. */
+    public boolean recoverRejectedServerJoin(Connection connection, boolean rejectedCredentials) {
+        ServerAttempt attempt = serverAttempt;
+        Minecraft minecraft = Minecraft.getInstance();
+        if (attempt == null || minecraft.screen != attempt.screen()) return false;
+        ConnectScreenAccess owner = (ConnectScreenAccess) (Object) attempt.screen();
+        if (owner.autoauth$getConnection() != connection || owner.autoauth$isAborted()) return false;
+        serverAttempt = null;
+        if (!rejectedCredentials || !ModConfig.get().auto || serverRecoveryAttempted
+                || attempt.data().isLan() || attempt.data().isRealm()) return false;
+        serverRecoveryAttempted = true;
+        AuthStatusService.get().rejectCurrentSession();
+        PendingJoins.beginServer(attempt.parent(), attempt.address(), attempt.data(), attempt.quickPlay(), attempt.transfer());
+        minecraft.setScreen(new ServerWaitingScreen(attempt.parent()));
+        return true;
+    }
+
+    public void serverJoinAccepted(Connection connection) {
+        ServerAttempt attempt = serverAttempt;
+        if (attempt != null && ((ConnectScreenAccess) (Object) attempt.screen()).autoauth$getConnection() == connection) {
+            serverAttempt = null;
+        }
     }
 
     /** Prevent repeated Realms-only rejection from creating an endless successful-reauth loop. */
@@ -113,7 +165,14 @@ public final class SessionOrchestrator {
             boolean quickPlay = PendingJoins.quickPlay();
             var transfer = PendingJoins.transferState();
             PendingJoins.cancel();
-            if (address != null) ConnectScreen.startConnecting(parent, minecraft, address, data, quickPlay, transfer);
+            if (address != null) {
+                resumingServerJoin = true;
+                try {
+                    ConnectScreen.startConnecting(parent, minecraft, address, data, quickPlay, transfer);
+                } finally {
+                    resumingServerJoin = false;
+                }
+            }
         } else if (PendingJoins.isPendingRealms() && screen instanceof RealmsWaitingScreen waiting) {
             Screen parent = PendingJoins.realmsParent();
             PendingJoins.cancel();

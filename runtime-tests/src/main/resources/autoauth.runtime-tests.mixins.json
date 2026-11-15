@@ -9,6 +9,7 @@
         "RuntimeMinecraftSessionServiceMixin",
         "RuntimeMinecraftAccess",
         "RuntimeStatusAccess",
+        "RuntimeStatusTrackerAccess",
         "RuntimeSessionMixin",
         "RuntimeStatusMixin",
         "RuntimeAuthMixin",
